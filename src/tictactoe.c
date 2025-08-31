@@ -164,7 +164,7 @@ static void play_strict(state_t* S){
     S->used_r_first = 1;
 
     if (!첫턴_r처리(S)){ puts_NO(); hold_console(); return; }
-
+    printf("\nREAL Tic-Tac_toe mode activated.");
     draw_board(S);
 
     while (1){
