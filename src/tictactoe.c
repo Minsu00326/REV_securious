@@ -1,10 +1,3 @@
-// r누르면 STRICT(CTF) 모드, 아니면 일반 모드 (돌리기 구현이 어려워서 그냥 트리거로 사용)
-// STRICT 모드에서는 첫 입력이 r이어야 하며,
-// 이후 착수는 오름차순 제약을 만족해야 함.
-// (오름차순 제약: X는 1,2,3,... / O는 1,2,3,... 순서로만 착수 가능)
-// STRICT 모드에서 승리 시 FLAG 출력 (가짜 FLAG 가능)
-// STRICT 모드에서 오류 발생 시 NO 출력
-// 일반 모드에서는 자유롭게 착수 가능, r 입력 불가 
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -21,62 +14,155 @@
 #define WAIT_ON_EXIT 1
 #endif
 
-// -------------------- 공용 상태 --------------------
+// -------------------- State --------------------
 typedef struct {
     int board[9];     // 0=empty, 1=X, 2=O
-    int who;          // 현재 턴 (1=X, 2=O)
-    int turn;         // 진행된 수
-    int used_r_first; // 첫 입력이 r인지 여부
+    int who;          // current turn (1=X, 2=O)
+    int turn;         // number of moves
+    int used_r_first; // whether first input was r
 
-    // --- 2번, 3번 담당에서 사용할 변수들 ---
-    int weights[9];   // 각 칸의 가중치
-    int sumX, sumO;   // X/O 가중치 합
-    int nextX, nextO; // 오름차순 제약 검사용
+    int weights[9];   // weight of each cell
+    int sumX, sumO;   // X/O weight sums
+    int nextX, nextO; // ascending order check (unused for now)
 } state_t;
 
-// -------------------- 승리 조건 --------------------
+// -------------------- Win condition --------------------
 static const int WIN[8][3] = {
   {0,1,2},{3,4,5},{6,7,8},
   {0,3,6},{1,4,7},{2,5,8},
   {0,4,8},{2,4,6}
 };
 
-// -------------------- 2,3번 담당 (아직 구현 X) --------------------
-// TODO: 2번 - 첫턴 r 처리
-static bool 첫턴_r처리(state_t* S){
+// -------------------- forward declarations --------------------
+static int check_win(const int b[9]);
+
+// -------------------- simple boxed UI helpers --------------------
+static void print_box(const char* lines[], int count){
+    int width = 0;
+    for (int i=0;i<count;i++){
+        int len = (int)strlen(lines[i]);
+        if (len > width) width = len;
+    }
+    putchar('+'); for (int i=0;i<width+2;i++) putchar('-'); puts("+");
+    for (int i=0;i<count;i++){
+        int pad = width - (int)strlen(lines[i]);
+        printf("| %s", lines[i]);
+        for (int k=0;k<pad;k++) putchar(' ');
+        puts(" |");
+    }
+    putchar('+'); for (int i=0;i<width+2;i++) putchar('-'); puts("+");
+}
+
+static void show_end_box(const state_t* S, const char* status_line, int res, const char* finale){
+    char line_turn[64];
+    snprintf(line_turn, sizeof(line_turn), "Turn: %d  Next: %c", S->turn, (S->who==1?'X':'O'));
+
+    const char* lines[4];
+    int n = 0;
+    lines[n++] = line_turn;           // Turn/Next
+    lines[n++] = status_line;         // Result
+
+    if (res==1){
+        lines[n++] = "OK";
+        lines[n++] = finale;          // FLAG
+    } else {
+        lines[n++] = "NO";
+    }
+    print_box(lines, n);
+}
+
+// -------------------- Visual helpers for STRICT mode --------------------
+static void sleep_ms(int ms){
+#ifdef _WIN32
+    Sleep(ms);
+#else
+    usleep(ms*1000);
+#endif
+}
+
+// Enable ANSI colors for Windows 10+ terminals (best-effort)
+static void enable_ansi_colors(void){
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD mode = 0;
+    if (!GetConsoleMode(h, &mode)) return;
+    mode |= 0x0004; // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    SetConsoleMode(h, mode);
+#endif
+}
+
+static void clear_screen(void){
+    printf("\x1b[2J\x1b[H");
+    fflush(stdout);
+}
+
+static void strict_intro(void){
+    enable_ansi_colors();
+    clear_screen();
+#ifdef _WIN32
+    Beep(880, 90); sleep_ms(60);
+    Beep(660, 90); sleep_ms(60);
+#endif
+    printf("\x1b[1;31m");
+    puts("########################################");
+    puts("#            STRICT  MODE              #");
+    puts("########################################");
+    printf("\x1b[0m");
+
+    printf("\n\x1b[1mArming checks\x1b[0m ");
+    for (int i=0;i<14;i++){ printf("."); fflush(stdout); sleep_ms(60); }
+    printf(" done\n");
+
+    printf("\x1b[32mREAL Tic-Tac_toe mode activated.\x1b[0m\n\n");
+}
+
+// -------------------- TODO functions --------------------
+static bool handle_first_r(state_t* S) {
+    // (추후 STRICT 전용 초기화가 필요하면 여기에 구현)
     (void)S;
     return true;
 }
 
-// TODO: 3번 - 착수 전 검사 (오름차순 제약 등)
-static bool 착수전_검사(state_t* S, int idx){
+static bool check_before_move(state_t* S, int idx) {
+    // (추후 오름차순 제약 등 검사가 필요하면 여기에 구현)
     (void)S; (void)idx;
     return true;
 }
 
-// TODO: 2,3번 - 착수 후 처리 (합 누적, next 갱신)
-static void 착수후_처리(state_t* S, int idx){
-    (void)S; (void)idx;
+// 합 누적 (가중치 lazy init 포함)
+static void handle_after_move(state_t* S, int idx) {
+    if (S->weights[0] == 0 && S->weights[8] == 0) {
+        static const int W[9] = {41, 8, 2, 48, 18, 15, 9, 16, 57};
+        memcpy(S->weights, W, sizeof(W));
+    }
+    int w = S->weights[idx];
+    if (S->who == 1) S->sumX += w; else S->sumO += w;
 }
 
-// TODO: 3번 - 최종 판정 (FLAG 출력, 가짜 FLAG, 오류 등)
-static int 최종판정_STRICT(const state_t* S, char* out, size_t n){
-    (void)S;
-    if (n) snprintf(out, n, "ERR:NOT_IMPLEMENTED");
+// STRICT: 무승부 && sumX==sumO -> FLAG
+static int final_judgement_STRICT(const state_t* S, char* out, size_t n) {
+    if (check_win(S->board) != 0) { if (n) snprintf(out, n, "NO"); return 0; }
+    if (S->turn != 9)             { if (n) snprintf(out, n, "NO"); return 0; }
+    if (S->sumX == S->sumO) {
+        if (n) snprintf(out, n, "FLAG{draw_equal_sum}");
+        return 1;
+    }
+    if (n) snprintf(out, n, "NO");
     return 0;
 }
 
-// -------------------- (1번 담당) --------------------
+// -------------------- Common helpers --------------------
 static inline void puts_NO(void){ puts("NO"); fflush(stdout); }
 static inline void puts_OK(void){ puts("OK"); fflush(stdout); }
 
-static void hold_console(void){ // 게임 종료 후 콘솔 대기
+static void hold_console(void){
 #if WAIT_ON_EXIT
-  #ifdef _WIN32 // Windows
+  #ifdef _WIN32
     printf("\nPress any key to exit...");
     fflush(stdout);
     _getch();
-  #else // Linux, Mac
+  #else
     printf("\nPress Enter to exit...");
     fflush(stdout);
     int c; while ((c=getchar())!='\n' && c!=EOF) {}
@@ -84,7 +170,7 @@ static void hold_console(void){ // 게임 종료 후 콘솔 대기
 #endif
 }
 
-static int read_token(void){ // 공백 무시하고 다음 문자 읽기
+static int read_token(void){
     int ch;
     do {
         ch = getchar();
@@ -93,7 +179,7 @@ static int read_token(void){ // 공백 무시하고 다음 문자 읽기
     return ch;
 }
 
-static int check_win(const int b[9]){ // 승리 조건 검사
+static int check_win(const int b[9]){
     for (int i=0;i<8;i++){
         int a=WIN[i][0], c=WIN[i][1], d=WIN[i][2];
         if (b[a] && b[a]==b[c] && b[c]==b[d]) return b[a];
@@ -101,13 +187,13 @@ static int check_win(const int b[9]){ // 승리 조건 검사
     return 0;
 }
 
-static char cell_char(int v, int pos){ // 칸 문자 
+static char cell_char(int v, int pos){
     if (v==1) return 'X';
     if (v==2) return 'O';
     return (char)('0'+pos+1);
 }
 
-static void draw_board(const state_t* S){ // 현재 보드 상태 출력
+static void draw_board(const state_t* S){
     printf("\n");
     for (int r=0;r<3;r++){
         for (int c=0;c<3;c++){
@@ -121,12 +207,12 @@ static void draw_board(const state_t* S){ // 현재 보드 상태 출력
     printf("Turn: %d  Next: %c\n", S->turn, (S->who==1?'X':'O'));
 }
 
-// -------------------- 일반 모드 (1번 담당) --------------------
+// -------------------- Normal mode --------------------
 static void play_normal(state_t* S, int first){
     int idx = first - '1';
     if (S->board[idx]!=0){ printf("Cell occupied. Game over.\n"); hold_console(); return; }
-    if (!착수전_검사(S, idx)){ printf("Invalid move.\n"); hold_console(); return; }
-    S->board[idx]=S->who; 착수후_처리(S, idx);
+    if (!check_before_move(S, idx)){ printf("Invalid move.\n"); hold_console(); return; }
+    S->board[idx]=S->who; handle_after_move(S, idx);
     S->turn++; S->who=2;
     draw_board(S);
 
@@ -138,8 +224,8 @@ static void play_normal(state_t* S, int first){
 
         idx = ch - '1';
         if (S->board[idx]!=0){ printf("Cell occupied. Game over.\n"); hold_console(); return; }
-        if (!착수전_검사(S, idx)){ printf("Invalid move.\n"); hold_console(); return; }
-        S->board[idx]=S->who; 착수후_처리(S, idx);
+        if (!check_before_move(S, idx)){ printf("Invalid move.\n"); hold_console(); return; }
+        S->board[idx]=S->who; handle_after_move(S, idx);
 
         int win = check_win(S->board);
         draw_board(S);
@@ -159,12 +245,12 @@ static void play_normal(state_t* S, int first){
     }
 }
 
-// -------------------- STRICT 모드 (1번 담당 I/O + 2,3번 빈자리) --------------------
+// -------------------- STRICT mode --------------------
 static void play_strict(state_t* S){
     S->used_r_first = 1;
 
-    if (!첫턴_r처리(S)){ puts_NO(); hold_console(); return; }
-    printf("\nREAL Tic-Tac_toe mode activated.");
+    if (!handle_first_r(S)){ puts_NO(); hold_console(); return; }
+    strict_intro();           // 시각 효과
     draw_board(S);
 
     while (1){
@@ -175,31 +261,29 @@ static void play_strict(state_t* S){
 
         int idx = ch - '1';
         if (S->board[idx]!=0){ printf("Cell occupied. Game over.\n"); hold_console(); return; }
-        if (!착수전_검사(S, idx)){ printf("Invalid move.\n"); hold_console(); return; }
+        if (!check_before_move(S, idx)){ printf("Invalid move.\n"); hold_console(); return; }
 
         S->board[idx] = S->who;
-        착수후_처리(S, idx);
+        handle_after_move(S, idx);
 
         int win = check_win(S->board);
         draw_board(S);
 
         if (win){
-            if (win==1) printf("X wins!\n"); else printf("O wins!\n");
+            const char* status = (win==1) ? "X wins!" : "O wins!";
             char finale[256];
-            int res = 최종판정_STRICT(S, finale, sizeof(finale));
-            if (res==1){ puts_OK(); puts(finale); }
-            else        puts(finale);
+            int res = final_judgement_STRICT(S, finale, sizeof(finale));
+            show_end_box(S, status, res, finale);
             hold_console();
             return;
         }
 
         S->turn++;
         if (S->turn==9){
-            printf("Draw!\n");
+            const char* status = "Draw!";
             char finale[256];
-            int res = 최종판정_STRICT(S, finale, sizeof(finale));
-            if (res==1){ puts_OK(); puts(finale); }
-            else        puts(finale);
+            int res = final_judgement_STRICT(S, finale, sizeof(finale));
+            show_end_box(S, status, res, finale);
             hold_console();
             return;
         }
